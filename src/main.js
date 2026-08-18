@@ -191,6 +191,7 @@ app.innerHTML = `
           <label><span>Priority</span><select id="editCrPriority"><option>Low</option><option>Medium</option><option>High</option></select></label>
         </div>
         <label><span>Status</span><select id="editCrStatus"></select></label>
+        <p class="field-hint">Cập nhật tuần tự theo quy trình · có thể bỏ qua bước Duyệt khách hàng · Processing cần có task link</p>
         <div class="task-links">
           <span>Task links · <strong id="editCrTaskCount">0 tasks</strong></span>
           <div class="task-links-add">
@@ -244,7 +245,6 @@ function addTaskLink(id, url) {
   if (!r.links) r.links = [];
   r.links.push({ id: `L${r.links.length + 1}-${Date.now()}`, url });
   r.tasks = taskLabel(r);
-  if (r.status === "New") r.status = "In progress";
   saveProjects();
 }
 function removeTaskLink(id, linkId) {
@@ -262,7 +262,17 @@ function renderEditLinks(r) {
   document.querySelector("#editCrTaskCount").textContent = taskLabel(r);
 }
 
-const statuses = ["All statuses", "New", "Planning", "In progress", "In review", "Client review", "Approved", "Done"];
+const statuses = ["All statuses", "New", "Planning", "In review", "Client review", "Approved", "In progress", "Done"];
+const STATUS_FLOW = statuses.slice(1);
+function statusIndex(s) { const i = STATUS_FLOW.indexOf(s); return i === -1 ? 0 : i; }
+function allowedStatusesFor(current) {
+  const i = statusIndex(current);
+  const allowed = new Set(STATUS_FLOW.slice(0, i + 1));
+  const next = STATUS_FLOW[i + 1];
+  if (next) allowed.add(next);
+  if (next === "Client review" && STATUS_FLOW[i + 2]) allowed.add(STATUS_FLOW[i + 2]);
+  return STATUS_FLOW.filter(s => allowed.has(s));
+}
 function rowTemplate(r, child = false) {
   const description = r.description ? ` · ${escapeHtml(r.description)}` : "";
   return `<div class="table data-row ${child ? "child-row" : ""}" data-row-id="${r.id}">
@@ -359,7 +369,7 @@ function openEditCr(id) {
   document.querySelector("#editCrDescription").value = r.description || "";
   document.querySelector("#editCrOwner").value = r.owner;
   document.querySelector("#editCrPriority").value = r.priority;
-  document.querySelector("#editCrStatus").innerHTML = statuses.slice(1).map(s => `<option>${s}</option>`).join("");
+  document.querySelector("#editCrStatus").innerHTML = allowedStatusesFor(r.status).map(s => `<option>${s}</option>`).join("");
   document.querySelector("#editCrStatus").value = r.status;
   document.querySelector("#editCrLinkInput").value = "";
   renderEditLinks(r);
@@ -499,7 +509,20 @@ editCrForm.addEventListener("submit", e => {
   const id = document.querySelector("#editCrId").value; const found = findRequest(id); if (!found) return;
   const r = found.item; const title = document.querySelector("#editCrTitle").value.trim(); const owner = document.querySelector("#editCrOwner").value.trim();
   if (!title || !owner) { editFormError.textContent = "Vui lòng nhập Request title và Owner."; editFormError.classList.remove("hidden"); return; }
-  Object.assign(r, { title, description: document.querySelector("#editCrDescription").value.trim(), owner, priority: document.querySelector("#editCrPriority").value, status: document.querySelector("#editCrStatus").value });
+  const newStatus = document.querySelector("#editCrStatus").value;
+  if (newStatus !== r.status) {
+    if (!allowedStatusesFor(r.status).includes(newStatus)) {
+      editFormError.textContent = "Vui lòng cập nhật trạng thái theo đúng thứ tự quy trình (có thể bỏ qua bước Duyệt khách hàng).";
+      editFormError.classList.remove("hidden");
+      return;
+    }
+    if (newStatus === "In progress" && !(r.links || []).length) {
+      editFormError.textContent = "Cần thêm ít nhất 1 task link trước khi chuyển sang Processing.";
+      editFormError.classList.remove("hidden");
+      return;
+    }
+  }
+  Object.assign(r, { title, description: document.querySelector("#editCrDescription").value.trim(), owner, priority: document.querySelector("#editCrPriority").value, status: newStatus });
   r.tasks = taskLabel(r);
   saveProjects(); render(); closeModal();
 });
