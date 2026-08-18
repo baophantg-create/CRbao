@@ -554,6 +554,15 @@ a { color: inherit; }
 .status-option { width: 100%; border: 0; background: transparent; text-align: left; border-radius: 5px; padding: 7px 8px; font-size: 9px; color: #344054; }
 .status-option:hover { background: #f7f8fa; }
 .modal-card:has(form:not(.hidden)) { width: min(100%, 430px); }
+.modal-card:has(#projectsListModal:not(.hidden)) { width: min(100%, 380px); }
+.projects-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; max-height: 260px; overflow-y: auto; }
+.project-row { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; border: 1px solid #e4e7eb; border-radius: 8px; background: #fff; padding: 10px 12px; text-align: left; }
+.project-row:hover { background: #fafbfc; border-color: #d7dce2; }
+.project-row.active { border-color: var(--blue); background: #f5f8ff; }
+.project-row-name { font-size: 11px; font-weight: 600; color: #263244; }
+.project-row-name em { color: var(--blue); font-style: normal; font-weight: 600; font-size: 9px; margin-left: 4px; }
+.project-row-meta { font-size: 9px; color: #737b86; }
+.project-row-count { font-size: 9px; color: #4d5662; }
 .modal-heading { margin-bottom: 18px; }
 .modal-kicker { display: block; color: #155eef; font-size: 8px; font-weight: 700; letter-spacing: .08em; margin-bottom: 6px; }
 .modal-heading h3 { margin: 0 0 6px; }

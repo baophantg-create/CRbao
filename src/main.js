@@ -15,8 +15,10 @@ const icon = (name, size = 14) => {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ""}</svg>`;
 };
 
-const STORAGE_KEY = "nimbus-commerce-platform-v1";
-const PROJECT_KEY = "nimbus-commerce-project-v1";
+const LEGACY_REQUESTS_KEY = "nimbus-commerce-platform-v1";
+const LEGACY_PROJECT_KEY = "nimbus-commerce-project-v1";
+const PROJECTS_KEY = "nimbus-commerce-projects-v1";
+const ACTIVE_PROJECT_KEY = "nimbus-commerce-active-project-v1";
 const AUTH_KEY = "nimbus-commerce-auth-v1";
 const ADMIN_ACCOUNT = { username: "admin", password: "Admin@123" };
 
@@ -40,17 +42,34 @@ const seedRequests = [
   { id: "CR-1021", title: "Support custom roles for external partners", meta: "Submitted Aug 12 · Access controls", tasks: "0 tasks", owner: "Ngọc Linh", priority: "Low", status: "Approved" }
 ];
 
-let requests = load(STORAGE_KEY, seedRequests);
-let project = load(PROJECT_KEY, {
-  name: "Commerce Platform",
-  client: "Atlas Retail",
-  owner: "Bảo Phan",
-  description: "Project workspace"
-});
+function migrateProjects() {
+  const existing = localStorage.getItem(PROJECTS_KEY);
+  if (existing) {
+    try { return JSON.parse(existing); } catch { /* fall through to rebuild from legacy keys */ }
+  }
+  const legacyProject = load(LEGACY_PROJECT_KEY, {
+    name: "Commerce Platform", client: "Atlas Retail", owner: "Bảo Phan", description: "Project workspace"
+  });
+  const legacyRequests = load(LEGACY_REQUESTS_KEY, seedRequests);
+  const initial = [{ id: "p1", ...legacyProject, requests: legacyRequests }];
+  save(PROJECTS_KEY, initial);
+  return initial;
+}
+
+let projects = migrateProjects();
+let activeProjectId = localStorage.getItem(ACTIVE_PROJECT_KEY) || projects[0].id;
+if (!projects.some(p => p.id === activeProjectId)) activeProjectId = projects[0].id;
 let activeStatus = "All statuses";
+function saveProjects() { save(PROJECTS_KEY, projects); }
+function setActiveProjectId(id) { activeProjectId = id; localStorage.setItem(ACTIVE_PROJECT_KEY, id); }
+function projectStats(p) {
+  const items = p.requests.flatMap(r => [r, ...(r.children || [])]);
+  return { active: p.requests.length, completed: items.filter(r => r.status === "Done" || r.status === "Approved").length };
+}
 
 function initApp() {
 const app = document.querySelector("#app");
+let project = projects.find(p => p.id === activeProjectId);
 
 app.innerHTML = `
   <div class="app-shell">
@@ -58,7 +77,7 @@ app.innerHTML = `
       <div class="sidebar-brand">NIMBUS</div>
       <nav class="side-nav" aria-label="Main navigation">
         <button class="nav-link active">Change Requests</button>
-        <button class="nav-link">Projects</button>
+        <button class="nav-link" id="projectsNavBtn">Projects</button>
         <button class="nav-link">Team</button>
         <button class="nav-link">Settings</button>
       </nav>
@@ -131,6 +150,25 @@ app.innerHTML = `
         <div class="form-footer"><button type="button" class="outline-btn" id="cancelProject">Cancel</button><button type="submit" class="primary-btn">Save project</button></div>
       </form>
 
+      <div id="projectsListModal" class="hidden">
+        <div class="modal-heading"><span class="modal-kicker">PROJECTS</span><h3>Projects</h3><p>Switch workspace or create a new project.</p></div>
+        <div id="projectsList" class="projects-list"></div>
+        <div class="form-footer" style="justify-content:space-between">
+          <button type="button" class="outline-btn" id="cancelProjectsList">Close</button>
+          <button type="button" class="primary-btn" id="openNewProjectBtn">${icon("plus", 12)}<span>New project</span></button>
+        </div>
+      </div>
+
+      <form id="newProjectForm" class="hidden">
+        <div class="modal-heading"><span class="modal-kicker">NEW PROJECT</span><h3>Create project</h3><p>Start a new workspace with its own change requests.</p></div>
+        <label><span>Project name <em>*</em></span><input id="newProjectNameInput" required maxlength="80" placeholder="e.g. Loyalty Program" /></label>
+        <label><span>Client <em>*</em></span><input id="newProjectClientInput" required maxlength="80" /></label>
+        <label><span>Owner <em>*</em></span><input id="newProjectOwnerInput" required maxlength="60" /></label>
+        <label><span>Description</span><input id="newProjectDescriptionInput" maxlength="120" /></label>
+        <div class="form-error hidden" id="newProjectFormError"></div>
+        <div class="form-footer"><button type="button" class="outline-btn" id="cancelNewProject">Cancel</button><button type="submit" class="primary-btn">Create project</button></div>
+      </form>
+
       <form id="newCrForm" class="hidden">
         <div class="modal-heading"><span class="modal-kicker">CHANGE REQUEST</span><h3>New CR</h3><p>Create a new change request. New requests start with status <strong>New</strong>.</p></div>
         <label><span>Request title <em>*</em></span><input id="crTitle" required maxlength="100" placeholder="e.g. Add customer approval step" /></label>
@@ -177,6 +215,9 @@ const rows = document.querySelector("#rows");
 const modal = document.querySelector("#modal");
 const infoModal = document.querySelector("#infoModal");
 const projectForm = document.querySelector("#projectForm");
+const projectsListModal = document.querySelector("#projectsListModal");
+const newProjectForm = document.querySelector("#newProjectForm");
+const newProjectFormError = document.querySelector("#newProjectFormError");
 const newCrForm = document.querySelector("#newCrForm");
 const editCrForm = document.querySelector("#editCrForm");
 const confirmModal = document.querySelector("#confirmModal");
@@ -187,11 +228,11 @@ const statusMenu = document.querySelector("#statusMenu");
 let pendingDelete = null;
 
 function escapeHtml(value = "") { return String(value).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[c])); }
-function allItems() { return requests.flatMap(r => [r, ...(r.children || [])]); }
-function activeCount() { return requests.length; }
+function allItems() { return project.requests.flatMap(r => [r, ...(r.children || [])]); }
+function activeCount() { return project.requests.length; }
 function completedCount() { return allItems().filter(r => r.status === "Done" || r.status === "Approved").length; }
 function nextId(prefix = "CR") {
-  const max = requests.reduce((m, r) => Math.max(m, Number(String(r.id).replace(/^\D+/, "")) || 0), 1024);
+  const max = project.requests.reduce((m, r) => Math.max(m, Number(String(r.id).replace(/^\D+/, "")) || 0), 1024);
   return `${prefix}-${max + 1}`;
 }
 function todayMeta() { return `Submitted Aug 18 · ${project.name}`; }
@@ -204,14 +245,14 @@ function addTaskLink(id, url) {
   r.links.push({ id: `L${r.links.length + 1}-${Date.now()}`, url });
   r.tasks = taskLabel(r);
   if (r.status === "New") r.status = "In progress";
-  save(STORAGE_KEY, requests);
+  saveProjects();
 }
 function removeTaskLink(id, linkId) {
   const found = findRequest(id); if (!found) return;
   const r = found.item;
   r.links = (r.links || []).filter(l => l.id !== linkId);
   r.tasks = taskLabel(r);
-  save(STORAGE_KEY, requests);
+  saveProjects();
 }
 function renderEditLinks(r) {
   const links = r.links || [];
@@ -241,7 +282,7 @@ function matches(r, q) {
 function render() {
   const q = searchInput.value.trim().toLowerCase();
   let html = "";
-  requests.forEach(r => {
+  project.requests.forEach(r => {
     const statusMatch = activeStatus === "All statuses" || r.status === activeStatus;
     const childStatusMatch = (r.children || []).some(c => activeStatus === "All statuses" || c.status === activeStatus);
     const parentMatch = statusMatch && matches(r, q);
@@ -270,19 +311,41 @@ function refreshProject() {
   updateStats();
 }
 function openForm(form) {
-  [infoModal, projectForm, newCrForm, editCrForm, confirmModal].forEach(x => x.classList.add("hidden"));
+  [infoModal, projectForm, newCrForm, editCrForm, confirmModal, projectsListModal, newProjectForm].forEach(x => x.classList.add("hidden"));
   form.classList.remove("hidden"); modal.classList.remove("hidden");
 }
 function closeModal() { modal.classList.add("hidden"); }
 function showInfo(title, text) {
-  [projectForm, newCrForm, editCrForm, confirmModal].forEach(x => x.classList.add("hidden"));
+  [projectForm, newCrForm, editCrForm, confirmModal, projectsListModal, newProjectForm].forEach(x => x.classList.add("hidden"));
   document.querySelector("#modalTitle").textContent = title;
   document.querySelector("#modalText").textContent = text;
   infoModal.classList.remove("hidden"); modal.classList.remove("hidden");
 }
 function findRequest(id) {
-  for (const r of requests) { if (r.id === id) return { item: r, parent: null }; for (const c of (r.children || [])) if (c.id === id) return { item: c, parent: r }; }
+  for (const r of project.requests) { if (r.id === id) return { item: r, parent: null }; for (const c of (r.children || [])) if (c.id === id) return { item: c, parent: r }; }
   return null;
+}
+function renderProjectsList() {
+  document.querySelector("#projectsList").innerHTML = projects.map(p => {
+    const stats = projectStats(p);
+    const isActive = p.id === activeProjectId;
+    return `<button type="button" class="project-row ${isActive ? "active" : ""}" data-select-project="${p.id}">
+      <span class="project-row-name">${escapeHtml(p.name)}${isActive ? ' <em>· Current</em>' : ""}</span>
+      <span class="project-row-meta">${escapeHtml(p.client)} · Owner: ${escapeHtml(p.owner)}</span>
+      <span class="project-row-count">${stats.active} active CRs</span>
+    </button>`;
+  }).join("");
+}
+function switchProject(id) {
+  const found = projects.find(p => p.id === id); if (!found) return;
+  project = found;
+  setActiveProjectId(id);
+  activeStatus = "All statuses";
+  document.querySelector("#statusLabel").textContent = activeStatus;
+  searchInput.value = "";
+  refreshProject();
+  render();
+  closeModal();
 }
 function openNewCr() {
   newCrForm.reset(); document.querySelector("#crPriority").value = "Medium";
@@ -316,7 +379,7 @@ function addSubRequest(parentId) {
   const parentNumber = String(parent.id).replace(/^\D+/, "");
   const next = `SR-${parentNumber}.${parent.children.length + 1}`;
   parent.children.push({ id: next, title: "New sub-request", meta: `Sub-request of ${parent.id}`, tasks: "0 tasks", links: [], owner: project.owner, priority: "Medium", status: "New" });
-  save(STORAGE_KEY, requests); render(); openEditCr(next);
+  saveProjects(); render(); openEditCr(next);
 }
 
 searchInput.addEventListener("input", render);
@@ -351,6 +414,40 @@ editCrForm.addEventListener("click", e => {
 });
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
 
+document.querySelector("#projectsNavBtn").onclick = () => { renderProjectsList(); openForm(projectsListModal); };
+document.querySelector("#cancelProjectsList").onclick = closeModal;
+projectsListModal.addEventListener("click", e => {
+  const btn = e.target.closest("[data-select-project]"); if (!btn) return;
+  switchProject(btn.dataset.selectProject);
+});
+document.querySelector("#openNewProjectBtn").onclick = () => {
+  newProjectForm.reset();
+  newProjectFormError.classList.add("hidden");
+  openForm(newProjectForm);
+  requestAnimationFrame(() => document.querySelector("#newProjectNameInput").focus());
+};
+document.querySelector("#cancelNewProject").onclick = () => { renderProjectsList(); openForm(projectsListModal); };
+newProjectForm.addEventListener("submit", e => {
+  e.preventDefault();
+  const name = document.querySelector("#newProjectNameInput").value.trim();
+  const client = document.querySelector("#newProjectClientInput").value.trim();
+  const owner = document.querySelector("#newProjectOwnerInput").value.trim();
+  if (!name || !client || !owner) {
+    newProjectFormError.textContent = "Vui lòng nhập Project name, Client và Owner.";
+    newProjectFormError.classList.remove("hidden");
+    return;
+  }
+  const newProject = {
+    id: `p${Date.now()}`,
+    name, client, owner,
+    description: document.querySelector("#newProjectDescriptionInput").value.trim() || "Project workspace",
+    requests: []
+  };
+  projects.push(newProject);
+  saveProjects();
+  switchProject(newProject.id);
+});
+
 document.querySelector("#editBtn").onclick = () => {
   document.querySelector("#projectNameInput").value = project.name;
   document.querySelector("#projectClientInput").value = project.client;
@@ -378,13 +475,11 @@ document.addEventListener("click", e => {
 
 projectForm.addEventListener("submit", e => {
   e.preventDefault();
-  project = {
-    name: document.querySelector("#projectNameInput").value.trim(),
-    client: document.querySelector("#projectClientInput").value.trim(),
-    owner: document.querySelector("#projectOwnerInput").value.trim(),
-    description: document.querySelector("#projectDescriptionInput").value.trim() || "Project workspace"
-  };
-  save(PROJECT_KEY, project); refreshProject(); closeModal();
+  project.name = document.querySelector("#projectNameInput").value.trim();
+  project.client = document.querySelector("#projectClientInput").value.trim();
+  project.owner = document.querySelector("#projectOwnerInput").value.trim();
+  project.description = document.querySelector("#projectDescriptionInput").value.trim() || "Project workspace";
+  saveProjects(); refreshProject(); closeModal();
 });
 
 newCrForm.addEventListener("submit", e => {
@@ -392,11 +487,11 @@ newCrForm.addEventListener("submit", e => {
   const title = document.querySelector("#crTitle").value.trim();
   const owner = document.querySelector("#crOwner").value.trim();
   if (!title || !owner) { formError.textContent = "Vui lòng nhập Request title và Owner."; formError.classList.remove("hidden"); return; }
-  requests.unshift({
+  project.requests.unshift({
     id: nextId(), title, description: document.querySelector("#crDescription").value.trim(), meta: todayMeta(),
     tasks: "0 tasks", links: [], owner, priority: document.querySelector("#crPriority").value, status: "New", children: []
   });
-  save(STORAGE_KEY, requests); searchInput.value = ""; activeStatus = "All statuses"; document.querySelector("#statusLabel").textContent = activeStatus; render(); closeModal();
+  saveProjects(); searchInput.value = ""; activeStatus = "All statuses"; document.querySelector("#statusLabel").textContent = activeStatus; render(); closeModal();
 });
 
 editCrForm.addEventListener("submit", e => {
@@ -406,15 +501,15 @@ editCrForm.addEventListener("submit", e => {
   if (!title || !owner) { editFormError.textContent = "Vui lòng nhập Request title và Owner."; editFormError.classList.remove("hidden"); return; }
   Object.assign(r, { title, description: document.querySelector("#editCrDescription").value.trim(), owner, priority: document.querySelector("#editCrPriority").value, status: document.querySelector("#editCrStatus").value });
   r.tasks = taskLabel(r);
-  save(STORAGE_KEY, requests); render(); closeModal();
+  saveProjects(); render(); closeModal();
 });
 
 document.querySelector("#cancelDelete").onclick = closeModal;
 document.querySelector("#confirmDelete").onclick = () => {
   if (!pendingDelete) return;
   if (pendingDelete.parent) pendingDelete.parent.children = (pendingDelete.parent.children || []).filter(c => c.id !== pendingDelete.id);
-  else requests = requests.filter(r => r.id !== pendingDelete.id);
-  save(STORAGE_KEY, requests); pendingDelete = null; render(); closeModal();
+  else project.requests = project.requests.filter(r => r.id !== pendingDelete.id);
+  saveProjects(); pendingDelete = null; render(); closeModal();
 };
 
 document.querySelector("#logoutBtn").onclick = () => {
